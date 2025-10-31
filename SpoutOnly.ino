@@ -7,8 +7,14 @@
 // - Stops pouring automatically after a maximum time
 //
 // Wiring (adjust pin numbers below if your wiring is different):
-// - Ultrasonic TRIGGER -> Arduino pin 2
-// - Ultrasonic ECHO    -> Arduino pin 4
+// OPTION A — 3-pin ultrasonic (shared TRIGGER/ECHO on one pin):
+// - Connect the sensor's SIG to a single Arduino pin.
+// - Set TRIGGER_PIN and ECHO_PIN to the SAME pin number below.
+//   The code will automatically detect this and switch modes.
+//
+// OPTION B — 4-pin ultrasonic (separate TRIGGER and ECHO):
+// - Ultrasonic TRIGGER -> Arduino pin 2 (TRIGGER_PIN)
+// - Ultrasonic ECHO    -> Arduino pin 4 (ECHO_PIN)
 // - Servo signal       -> Arduino pin 9 (power the servo from a stable 5V source)
 // - Relay signal       -> Arduino pin 13 (module is typically active-LOW)
 //
@@ -21,25 +27,35 @@
 
 #include <Servo.h>
 
-// Pins
+// ############ PIN CONFIGURATION ############
+// if using a 3 pin ultrasonic sensor set these to same. the code will handle the rest.
 const int TRIGGER_PIN = 2;
 const int ECHO_PIN    = 4;
+
+// Servo
 const int SERVO_PIN   = 9;
+// Relay
 const int RELAY_PIN   = 13; // Many relay boards are active-LOW
 
-// Pour control
+// ############ END PIN CONFIGURATION ############
+
+// ############ POUR CONTROL ############
 const int POUR_OPEN_ANGLE   = 120;
 const int POUR_CLOSED_ANGLE = 55;
 const int POUR_DISTANCE_CM  = 14;   // Cup is considered "present" when closer than this
 const unsigned long MAX_POUR_TIME_MS = 8000; // Max pour duration (8 seconds)
 
-// Sampling
+// ############ SAMPLING ############
 const int SAMPLE_COUNT     = 3;     // Average this many readings
 const int SAMPLE_DELAY_MS  = 25;    // Delay between readings for stability
 
-// Debug
+// ############ END SAMPLING ############
+
+// ############ DEBUG ############
 const bool ENABLE_SERIAL_DEBUG = false;      // Set to true to enable debug prints
 const unsigned long SERIAL_BAUD_RATE = 115200;
+
+// ############ END DEBUG ############
 
 Servo pourServo;
 
@@ -47,10 +63,20 @@ Servo pourServo;
 bool isPouring = false;
 bool wasNear   = false;             // Tracks if the previous reading was "near" to detect arrival
 unsigned long pourStartMs = 0;      // When the current pour started
+bool ultrasonicIs3Pin = false;      // Auto-detected in setup
 
 void setup() {
-  pinMode(TRIGGER_PIN, OUTPUT);
-  pinMode(ECHO_PIN, INPUT);
+  // Detect 3-pin vs 4-pin by whether TRIGGER and ECHO are the same pin
+  ultrasonicIs3Pin = (TRIGGER_PIN == ECHO_PIN);
+
+  if (ultrasonicIs3Pin) {
+    // Prepare shared pin (kept LOW) — we'll switch to INPUT only during echo read
+    pinMode(TRIGGER_PIN, OUTPUT);
+    digitalWrite(TRIGGER_PIN, LOW);
+  } else {
+    pinMode(TRIGGER_PIN, OUTPUT);
+    pinMode(ECHO_PIN, INPUT);
+  }
 
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, HIGH); // Off by default (active-LOW module)
@@ -60,6 +86,15 @@ void setup() {
 
   if (ENABLE_SERIAL_DEBUG) {
     Serial.begin(SERIAL_BAUD_RATE);
+    if (ultrasonicIs3Pin) {
+      Serial.print("Ultrasonic mode: 3-pin on D");
+      Serial.println(TRIGGER_PIN);
+    } else {
+      Serial.print("Ultrasonic mode: 4-pin TRIG=D");
+      Serial.print(TRIGGER_PIN);
+      Serial.print(" ECHO=D");
+      Serial.println(ECHO_PIN);
+    }
   }
 }
 
@@ -136,22 +171,51 @@ int readAverageDistanceCm() {
 }
 
 int readDistanceOnceCm() {
-  // Ensure a clean HIGH pulse
-  digitalWrite(TRIGGER_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(TRIGGER_PIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIGGER_PIN, LOW);
+  if (ultrasonicIs3Pin) {
+    // 3-pin: TRIGGER and ECHO share one pin. We drive a trigger pulse as OUTPUT,
+    // then switch to INPUT to listen for the echo pulse.
+    digitalWrite(TRIGGER_PIN, LOW);
+    pinMode(TRIGGER_PIN, OUTPUT);
+    delayMicroseconds(2);
+    digitalWrite(TRIGGER_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIGGER_PIN, LOW);
 
-  // Use a timeout (~30ms) to avoid long blocking if no echo
-  unsigned long duration = pulseIn(ECHO_PIN, HIGH, 30000UL);
-  if (duration == 0) {
-    return 0; // Timeout: no object detected within range
+    // Listen for echo
+    pinMode(TRIGGER_PIN, INPUT);
+    // Ensure pull-up is disabled
+    digitalWrite(TRIGGER_PIN, LOW);
+
+    unsigned long duration = pulseIn(TRIGGER_PIN, HIGH, 30000UL);
+
+    // Return pin to a known idle state (LOW output) for next cycle
+    pinMode(TRIGGER_PIN, OUTPUT);
+    digitalWrite(TRIGGER_PIN, LOW);
+
+    if (duration == 0) {
+      return 0;
+    }
+
+    return (int)(duration / 29 / 2);
+  } else {
+    // 4-pin: separate TRIGGER and ECHO
+    // Ensure a clean HIGH pulse
+    digitalWrite(TRIGGER_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIGGER_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIGGER_PIN, LOW);
+
+    // Use a timeout (~30ms) to avoid long blocking if no echo
+    unsigned long duration = pulseIn(ECHO_PIN, HIGH, 30000UL);
+    if (duration == 0) {
+      return 0; // Timeout: no object detected within range
+    }
+
+    // Convert microseconds to centimeters
+    // Sound speed ~ 29 microseconds per cm (round-trip), so divide by 29, then by 2
+    return (int)(duration / 29 / 2);
   }
-
-  // Convert microseconds to centimeters
-  // Sound speed ~ 29 microseconds per cm (round-trip), so divide by 29, then by 2
-  return (int)(duration / 29 / 2);
 }
 
 
