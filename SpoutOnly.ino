@@ -31,6 +31,8 @@
 // if using a 3 pin ultrasonic sensor set these to same. the code will handle the rest.
 const int TRIGGER_PIN = 2;
 const int ECHO_PIN    = 4;
+const int MICROSEC_DELAY = 2;
+const int MICROSEC_PULSE = 10;
 
 // Servo
 const int SERVO_PIN   = 9;
@@ -108,7 +110,12 @@ void loop() {
     pourOff();
   }
 
-  if (ENABLE_SERIAL_DEBUG) Serial.println(distanceCm);
+  if (ENABLE_SERIAL_DEBUG) {
+    Serial.print("Distance: ");
+    Serial.println(distanceCm);
+    Serial.print("Pouring ?: ");
+    Serial.println(pourNow);
+  }
 
   delay(50);
 }
@@ -172,38 +179,26 @@ int readAverageDistanceCm() {
 
 int readDistanceOnceCm() {
   if (ultrasonicIs3Pin) {
-    // 3-pin: TRIGGER and ECHO share one pin. We drive a trigger pulse as OUTPUT,
-    // then switch to INPUT to listen for the echo pulse.
-    digitalWrite(TRIGGER_PIN, LOW);
+    // 3-pin: RadioShack/Seeed style sequence (shared TRIGGER/ECHO)
     pinMode(TRIGGER_PIN, OUTPUT);
+    digitalWrite(TRIGGER_PIN, LOW);
     delayMicroseconds(2);
     digitalWrite(TRIGGER_PIN, HIGH);
-    delayMicroseconds(10);
+    delayMicroseconds(5);
     digitalWrite(TRIGGER_PIN, LOW);
-
-    // Listen for echo
     pinMode(TRIGGER_PIN, INPUT);
-    // Ensure pull-up is disabled
-    digitalWrite(TRIGGER_PIN, LOW);
-
-    unsigned long duration = pulseIn(TRIGGER_PIN, HIGH, 30000UL);
-
-    // Return pin to a known idle state (LOW output) for next cycle
-    pinMode(TRIGGER_PIN, OUTPUT);
-    digitalWrite(TRIGGER_PIN, LOW);
-
+    unsigned long duration = pulseIn(TRIGGER_PIN, HIGH);
     if (duration == 0) {
       return 0;
     }
-
     return (int)(duration / 29 / 2);
   } else {
     // 4-pin: separate TRIGGER and ECHO
     // Ensure a clean HIGH pulse
     digitalWrite(TRIGGER_PIN, LOW);
-    delayMicroseconds(2);
+    delayMicroseconds(MICROSEC_DELAY);
     digitalWrite(TRIGGER_PIN, HIGH);
-    delayMicroseconds(10);
+    delayMicroseconds(MICROSEC_PULSE);
     digitalWrite(TRIGGER_PIN, LOW);
 
     // Use a timeout (~30ms) to avoid long blocking if no echo
